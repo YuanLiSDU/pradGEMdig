@@ -1,4 +1,7 @@
 
+#ifndef GEMDIG_VARIABLES_H
+#define GEMDIG_VARIABLES_H
+
 #include <vector>
 
 #include "Rtypes.h"
@@ -59,3 +62,5 @@ Double_t GasX[2000], GasY[2000], GasZ[2000], GasTime[2000];
 Double_t GasXout[2000], GasYout[2000], GasZout[2000];
 Double_t GasTheta[2000], GasP[2000], GasEdep[2000];
 Int_t GasPID[2000], GasPTID[2000], GasTID[2000], GasDID[2000];
+
+#endif
