@@ -1,0 +1,33 @@
+cmake_minimum_required(VERSION 3.10)
+
+project(GEMReconstruction)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Include directories
+include_directories(
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/third_party
+)
+
+# source files
+set(SOURCES
+    example.cpp
+    src/Cuts.cpp
+    src/GEMCluster.cpp
+    src/GEMDetector.cpp
+    src/GEMDetectorLayer.cpp
+    src/GEMPlane.cpp
+    src/MPDDataStruct.cpp
+    src/ValueType.cpp
+
+    third_party/ConfigArgs.cpp
+    third_party/ConfigObject.cpp
+    third_party/ConfigOption.cpp
+    third_party/ConfigParser.cpp
+    third_party/ConfigValue.cpp
+)
+
+# executable
+add_executable(gem_reconstruction ${SOURCES})
