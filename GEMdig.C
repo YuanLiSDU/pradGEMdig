@@ -1,7 +1,10 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "TCanvas.h"
 #include "TChain.h"
@@ -21,6 +24,41 @@ using std::cout;
 using std::endl;
 using std::string;
 
+std::vector<string> FindRootFiles(const string& folder,
+                                  const string& filenameKeyword)
+{
+    std::vector<string> files;
+    std::error_code error;
+    const std::filesystem::path folderPath(folder);
+
+    if(!std::filesystem::is_directory(folderPath, error)) {
+        std::cerr << "ROOT file folder not found: " << folder << endl;
+        return files;
+    }
+
+    std::filesystem::recursive_directory_iterator iterator(folderPath, error);
+    const std::filesystem::recursive_directory_iterator end;
+    while(iterator != end) {
+        if(error) {
+            error.clear();
+            iterator.increment(error);
+            continue;
+        }
+
+        const std::filesystem::directory_entry& entry = *iterator;
+        const string filename = entry.path().filename().string();
+        if(entry.is_regular_file(error) &&
+           entry.path().extension() == ".root" &&
+           filename.find(filenameKeyword) != string::npos) {
+            files.push_back(entry.path().string());
+        }
+        iterator.increment(error);
+    }
+
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
 Double_t PulseShape(Double_t t,
                     Double_t C,  // normalization factor, charge number on one strip
 				    Double_t Tp) // shaping time 56ns
@@ -37,14 +75,14 @@ Double_t PulseShape(Double_t t,
 }
 
 //add pedestal noise
-void GetPedestal(Double_t pulseXorY[samplingNum]){
+void GetPedestal(std::array<Double_t, samplingNum>& pulseXorY){
     for(int n = 0; n < samplingNum; n++){
         pulseXorY[n] += gRandom->Gaus(0., 15.); // pedestal noise, 15 ADC
     }
 }
 
 void ADCConvert(Double_t off, Double_t gain, Int_t bits,
-                Double_t pulseXorY[samplingNum])
+                std::array<Double_t, samplingNum>& pulseXorY)
 {
   // Convert analog value 'val' to integer ADC reading with 'bits' resolution
     for(int n=0; n<samplingNum; n++){
@@ -74,8 +112,6 @@ void SetTH2D(TH2D* hist) {
 }
 
 void loadFile(TChain& file, string filename) {
-    string folder = "data/";
-    filename = folder + filename + ".root";
     file.Add(filename.c_str());
     file.SetBranchAddress("EventID", &EventID);
     file.SetBranchAddress("GEM.N", &GasN);
@@ -98,32 +134,32 @@ void loadFile(TChain& file, string filename) {
 void GEMdig() {
     auto start = std::chrono::high_resolution_clock::now();
     gRandom->SetSeed(0);//1232 // 0 表示用系统时间自动生成种子
-    int Num = 10; //number of files
+
+
+    std::vector<string> signalFiles =
+        FindRootFiles("data", "signal");
+    std::vector<string> backgroundFiles =
+        FindRootFiles("2105", "simrun");
     TChain signal("T");
     TChain background("T");
-    loadFile(signal, "Uniform_signal_660-1540MeV");
-    loadFile(background, "x17_He_bot_2.2GeV_4um_1");
+
+    for(const string& filename : signalFiles) {
+        loadFile(signal, filename);
+    }
+    for(const string& filename : backgroundFiles) {
+        loadFile(background, filename);
+    }
     
     const int Ndata = signal.GetEntries();
     const int Nbg = background.GetEntries();
-    cout << "Number of entries in the signal data: " << Ndata << endl;
-    cout << "Number of entries in one background file: " << Nbg << endl;
+    cout << "Number of entries in all signal data: " << Ndata << endl;
+    cout << "Number of entries in all background data: " << Nbg << endl;
     background.GetEntry(Nbg-1);
-    int bg_entry = int(double(Nbg) / double(EventID) * 312.5/4. * 350.);
+    double fluxN_bg = EventID * backgroundFiles.size() * 10.;
+    cout << "background flux (Hz): " << fluxN_bg << endl;
+    int bg_entry = int(double(Nbg) / fluxN_bg * 312.5/4. * 350.);
     cout << "background entry numbers for each event: " << bg_entry << endl;
-    //bg_entry = 0; //550
-    bg_entry *= 2.;
-
-    loadFile(background, "x17_He_bot_2.2GeV_4um_2");
-    loadFile(background, "x17_He_bot_2.2GeV_4um_3");
-    loadFile(background, "x17_He_bot_2.2GeV_4um_4");
-    loadFile(background, "x17_He_bot_2.2GeV_4um_5");
-    loadFile(background, "x17_He_bot_2.2GeV_4um_6");
-    loadFile(background, "x17_He_bot_2.2GeV_4um_7");
-    loadFile(background, "x17_He_bot_2.2GeV_4um_8");
-    loadFile(background, "x17_He_bot_2.2GeV_4um_9");
-    loadFile(background, "x17_He_bot_2.2GeV_4um_10");
-
+    bg_entry = 2.;
     TH1D *peak = new TH1D("peak", "peak of the pulse", 100, 0, 5000);
     TH1D *peakY = new TH1D("peakY", "peakY of the pulse", 100, 0, 5000);
     TH2D *adc_Num = new TH2D("adc_Num", "Pulse Amplitude vs Fired Strip Number", 40, 0, 4000, 11, 0-0.5, 11-0.5);
@@ -135,7 +171,7 @@ void GEMdig() {
         Occupancy_Y[did] = new TH1D(Form("Occupancy of chamber%d(Y strips)", did), Form("Occupancy of chamber%d (Y strips)", did), map_y_bins, 0, map_y_bins);
     }
 
-    TFile *FiredStripsF = new TFile("FiredStrips_4mm_200percent.root", "RECREATE");
+    TFile *FiredStripsF = new TFile("output/FiredStrips_test.root", "RECREATE");
     FiredStripsF->cd();
     TTree *FiredStripsT = new TTree("T", "T");
 
@@ -143,48 +179,122 @@ void GEMdig() {
     Int_t fireNumX[4] = {};
     Int_t fireNumY[4] = {};
 
-    std::vector<Int_t> stripNumberX[4];
-    std::vector<std::array<Float_t, samplingNum>> pulseSamplesX[4];
-    std::vector<Float_t> peakX[4];
-    std::vector<Float_t> totalChargeX[4];
-    std::vector<Int_t> peakSampleX[4];
+    Int_t stripNumberX_0[map_x_bins];
+    Double_t pulseSamplesX_0[map_x_bins][samplingNum];
+    Double_t peakX_0[map_x_bins];
+    Double_t totalChargeX_0[map_x_bins];
+    Int_t peakSampleX_0[map_x_bins];
 
-    std::vector<Int_t> stripNumberY[4];
-    std::vector<std::array<Float_t, samplingNum>> pulseSamplesY[4];
-    std::vector<Float_t> peakYOut[4];
-    std::vector<Float_t> totalChargeY[4];
-    std::vector<Int_t> peakSampleY[4];
+    Int_t stripNumberY_0[map_y_bins];
+    Double_t pulseSamplesY_0[map_y_bins][samplingNum];
+    Double_t peakY_0[map_y_bins];
+    Double_t totalChargeY_0[map_y_bins];
+    Int_t peakSampleY_0[map_y_bins];
+
+    Int_t stripNumberX_1[map_x_bins];
+    Double_t pulseSamplesX_1[map_x_bins][samplingNum];
+    Double_t peakX_1[map_x_bins];
+    Double_t totalChargeX_1[map_x_bins];
+    Int_t peakSampleX_1[map_x_bins];
+
+    Int_t stripNumberY_1[map_y_bins];
+    Double_t pulseSamplesY_1[map_y_bins][samplingNum];
+    Double_t peakY_1[map_y_bins];
+    Double_t totalChargeY_1[map_y_bins];
+    Int_t peakSampleY_1[map_y_bins];
+
+    Int_t stripNumberX_2[map_x_bins];
+    Double_t pulseSamplesX_2[map_x_bins][samplingNum];
+    Double_t peakX_2[map_x_bins];
+    Double_t totalChargeX_2[map_x_bins];
+    Int_t peakSampleX_2[map_x_bins];
+
+    Int_t stripNumberY_2[map_y_bins];
+    Double_t pulseSamplesY_2[map_y_bins][samplingNum];
+    Double_t peakY_2[map_y_bins];
+    Double_t totalChargeY_2[map_y_bins];
+    Int_t peakSampleY_2[map_y_bins];
+
+    Int_t stripNumberX_3[map_x_bins];
+    Double_t pulseSamplesX_3[map_x_bins][samplingNum];
+    Double_t peakX_3[map_x_bins];
+    Double_t totalChargeX_3[map_x_bins];
+    Int_t peakSampleX_3[map_x_bins];
+
+    Int_t stripNumberY_3[map_y_bins];
+    Double_t pulseSamplesY_3[map_y_bins][samplingNum];
+    Double_t peakY_3[map_y_bins];
+    Double_t totalChargeY_3[map_y_bins];
+    Int_t peakSampleY_3[map_y_bins];
 
     FiredStripsT->Branch("eventNum", &outputEventNum, "eventNum/I");
-    FiredStripsT->Branch("fireNumX", fireNumX, "fireNumX[4]/I");
-    FiredStripsT->Branch("fireNumY", fireNumY, "fireNumY[4]/I");
 
-    for(Int_t did = 0; did < 4; ++did) {
-        FiredStripsT->Branch(Form("stripNumberX%d", did), &stripNumberX[did]);
-        FiredStripsT->Branch(Form("pulseSamplesX%d", did), &pulseSamplesX[did]);
-        FiredStripsT->Branch(Form("peakX%d", did), &peakX[did]);
-        FiredStripsT->Branch(Form("totalChargeX%d", did), &totalChargeX[did]);
-        FiredStripsT->Branch(Form("peakSampleX%d", did), &peakSampleX[did]);
+    FiredStripsT->Branch("fireNumX_0", &fireNumX[0], "fireNumX_0/I");
+    FiredStripsT->Branch("fireNumY_0", &fireNumY[0], "fireNumY_0/I");
+    FiredStripsT->Branch("stripNumberX_0", stripNumberX_0, "stripNumberX_0[fireNumX_0]/I");
+    FiredStripsT->Branch("pulseSamplesX_0", pulseSamplesX_0, "pulseSamplesX_0[fireNumX_0][6]/D");
+    FiredStripsT->Branch("peakX_0", peakX_0, "peakX_0[fireNumX_0]/D");
+    FiredStripsT->Branch("totalChargeX_0", totalChargeX_0, "totalChargeX_0[fireNumX_0]/D");
+    FiredStripsT->Branch("peakSampleX_0", peakSampleX_0, "peakSampleX_0[fireNumX_0]/I");
+    FiredStripsT->Branch("stripNumberY_0", stripNumberY_0, "stripNumberY_0[fireNumY_0]/I");
+    FiredStripsT->Branch("pulseSamplesY_0", pulseSamplesY_0, "pulseSamplesY_0[fireNumY_0][6]/D");
+    FiredStripsT->Branch("peakY_0", peakY_0, "peakY_0[fireNumY_0]/D");
+    FiredStripsT->Branch("totalChargeY_0", totalChargeY_0, "totalChargeY_0[fireNumY_0]/D");
+    FiredStripsT->Branch("peakSampleY_0", peakSampleY_0, "peakSampleY_0[fireNumY_0]/I");
 
-        FiredStripsT->Branch(Form("stripNumberY%d", did), &stripNumberY[did]);
-        FiredStripsT->Branch(Form("pulseSamplesY%d", did), &pulseSamplesY[did]);
-        FiredStripsT->Branch(Form("peakY%d", did), &peakYOut[did]);
-        FiredStripsT->Branch(Form("totalChargeY%d", did), &totalChargeY[did]);
-        FiredStripsT->Branch(Form("peakSampleY%d", did), &peakSampleY[did]);
-    }
+    FiredStripsT->Branch("fireNumX_1", &fireNumX[1], "fireNumX_1/I");
+    FiredStripsT->Branch("fireNumY_1", &fireNumY[1], "fireNumY_1/I");
+    FiredStripsT->Branch("stripNumberX_1", stripNumberX_1, "stripNumberX_1[fireNumX_1]/I");
+    FiredStripsT->Branch("pulseSamplesX_1", pulseSamplesX_1, "pulseSamplesX_1[fireNumX_1][6]/D");
+    FiredStripsT->Branch("peakX_1", peakX_1, "peakX_1[fireNumX_1]/D");
+    FiredStripsT->Branch("totalChargeX_1", totalChargeX_1, "totalChargeX_1[fireNumX_1]/D");
+    FiredStripsT->Branch("peakSampleX_1", peakSampleX_1, "peakSampleX_1[fireNumX_1]/I");
+    FiredStripsT->Branch("stripNumberY_1", stripNumberY_1, "stripNumberY_1[fireNumY_1]/I");
+    FiredStripsT->Branch("pulseSamplesY_1", pulseSamplesY_1, "pulseSamplesY_1[fireNumY_1][6]/D");
+    FiredStripsT->Branch("peakY_1", peakY_1, "peakY_1[fireNumY_1]/D");
+    FiredStripsT->Branch("totalChargeY_1", totalChargeY_1, "totalChargeY_1[fireNumY_1]/D");
+    FiredStripsT->Branch("peakSampleY_1", peakSampleY_1, "peakSampleY_1[fireNumY_1]/I");
+
+    FiredStripsT->Branch("fireNumX_2", &fireNumX[2], "fireNumX_2/I");
+    FiredStripsT->Branch("fireNumY_2", &fireNumY[2], "fireNumY_2/I");
+    FiredStripsT->Branch("stripNumberX_2", stripNumberX_2, "stripNumberX_2[fireNumX_2]/I");
+    FiredStripsT->Branch("pulseSamplesX_2", pulseSamplesX_2, "pulseSamplesX_2[fireNumX_2][6]/D");
+    FiredStripsT->Branch("peakX_2", peakX_2, "peakX_2[fireNumX_2]/D");
+    FiredStripsT->Branch("totalChargeX_2", totalChargeX_2, "totalChargeX_2[fireNumX_2]/D");
+    FiredStripsT->Branch("peakSampleX_2", peakSampleX_2, "peakSampleX_2[fireNumX_2]/I");
+    FiredStripsT->Branch("stripNumberY_2", stripNumberY_2, "stripNumberY_2[fireNumY_2]/I");
+    FiredStripsT->Branch("pulseSamplesY_2", pulseSamplesY_2, "pulseSamplesY_2[fireNumY_2][6]/D");
+    FiredStripsT->Branch("peakY_2", peakY_2, "peakY_2[fireNumY_2]/D");
+    FiredStripsT->Branch("totalChargeY_2", totalChargeY_2, "totalChargeY_2[fireNumY_2]/D");
+    FiredStripsT->Branch("peakSampleY_2", peakSampleY_2, "peakSampleY_2[fireNumY_2]/I");
+
+    FiredStripsT->Branch("fireNumX_3", &fireNumX[3], "fireNumX_3/I");
+    FiredStripsT->Branch("fireNumY_3", &fireNumY[3], "fireNumY_3/I");
+    FiredStripsT->Branch("stripNumberX_3", stripNumberX_3, "stripNumberX_3[fireNumX_3]/I");
+    FiredStripsT->Branch("pulseSamplesX_3", pulseSamplesX_3, "pulseSamplesX_3[fireNumX_3][6]/D");
+    FiredStripsT->Branch("peakX_3", peakX_3, "peakX_3[fireNumX_3]/D");
+    FiredStripsT->Branch("totalChargeX_3", totalChargeX_3, "totalChargeX_3[fireNumX_3]/D");
+    FiredStripsT->Branch("peakSampleX_3", peakSampleX_3, "peakSampleX_3[fireNumX_3]/I");
+    FiredStripsT->Branch("stripNumberY_3", stripNumberY_3, "stripNumberY_3[fireNumY_3]/I");
+    FiredStripsT->Branch("pulseSamplesY_3", pulseSamplesY_3, "pulseSamplesY_3[fireNumY_3][6]/D");
+    FiredStripsT->Branch("peakY_3", peakY_3, "peakY_3[fireNumY_3]/D");
+    FiredStripsT->Branch("totalChargeY_3", totalChargeY_3, "totalChargeY_3[fireNumY_3]/D");
+    FiredStripsT->Branch("peakSampleY_3", peakSampleY_3, "peakSampleY_3[fireNumY_3]/I");
 
     GEMStripMap gemMap[4]; // strip map for the four chambers, indexed by detector ID
     for(int did = 0; did < 4; did++) gemMap[did] = GEMStripMap(did);
 
     double validEntries = 0;
-    for(int i=0;i<9000;i++) { //max 9000 for 4um
+    for(int i=0;i<1000;i++) { //max 9000 for 4um
         if (i%100 == 0) cout << "start " << i << endl;        
-        signal.GetEntry(i);
 
         //clear strip ADC information for each event
         for(int did = 0; did < 4; did++){
             gemMap[did].Clear();
         }
+
+        /*
+        signal.GetEntry(i);
         
         int sig = 0;
         for(int n = 0; n < GasN; n++){
@@ -295,6 +405,7 @@ void GEMdig() {
             sig++;
         }
         if(sig < 1) continue;
+        */
         validEntries++;
         //for the background particles
         int bg = 0;
@@ -401,17 +512,38 @@ void GEMdig() {
         }
         // Already have the pulse shape for each strip, now convert to ADC value, add pedestal noise, threshold cut, and save the results
 
-        //loop over the four chambers
+        Int_t* stripNumberX[4] = {
+            stripNumberX_0, stripNumberX_1, stripNumberX_2, stripNumberX_3};
+        Double_t (*pulseSamplesX[4])[samplingNum] = {
+            pulseSamplesX_0, pulseSamplesX_1, pulseSamplesX_2, pulseSamplesX_3};
+        Double_t* peakXOut[4] = {peakX_0, peakX_1, peakX_2, peakX_3};
+        Double_t* totalChargeX[4] = {
+            totalChargeX_0, totalChargeX_1, totalChargeX_2, totalChargeX_3};
+        Int_t* peakSampleX[4] = {
+            peakSampleX_0, peakSampleX_1, peakSampleX_2, peakSampleX_3};
+
+        Int_t* stripNumberY[4] = {
+            stripNumberY_0, stripNumberY_1, stripNumberY_2, stripNumberY_3};
+        Double_t (*pulseSamplesY[4])[samplingNum] = {
+            pulseSamplesY_0, pulseSamplesY_1, pulseSamplesY_2, pulseSamplesY_3};
+        Double_t* peakYOut[4] = {peakY_0, peakY_1, peakY_2, peakY_3};
+        Double_t* totalChargeY[4] = {
+            totalChargeY_0, totalChargeY_1, totalChargeY_2, totalChargeY_3};
+        Int_t* peakSampleY[4] = {
+            peakSampleY_0, peakSampleY_1, peakSampleY_2, peakSampleY_3};
+
         for(int did = 0; did < 4; did++){
             fireNumX[did] = 0;
             fireNumY[did] = 0;
+
             for(int kx = 0; kx < map_x_bins; kx++) {
                 GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
                 GetPedestal(xStrip->pulse);
-                ADCConvert(fADCPedestal, fADCGain, fADCBits, xStrip->pulse);
-                double peakVal = 0.;
-                int peakSample = -1;
-                double totalCharge = 0.;
+                ADCConvert(0., 1., 12, xStrip->pulse);
+
+                Double_t peakVal = 0.;
+                Double_t totalCharge = 0.;
+                Int_t peakSample = -1;
                 for(int t = 0; t < samplingNum; t++){
                     totalCharge += xStrip->pulse[t];
                     if(xStrip->pulse[t] > peakVal){
@@ -419,22 +551,29 @@ void GEMdig() {
                         peakSample = t;
                     }
                 }
-                if(peakVal > fADCThreshold && totalCharge > fChargeThreshold) {
+
+                if(peakVal > fADCThreshold &&
+                   totalCharge > fChargeThreshold) {
+                    const Int_t firedIndex = fireNumX[did];
+                    stripNumberX[did][firedIndex] = kx;
+                    for(int t = 0; t < samplingNum; t++) {
+                        pulseSamplesX[did][firedIndex][t] = xStrip->pulse[t];
+                    }
+                    peakXOut[did][firedIndex] = peakVal;
+                    totalChargeX[did][firedIndex] = totalCharge;
+                    peakSampleX[did][firedIndex] = peakSample;
                     fireNumX[did]++;
-                    stripNumberX[did].push_back(kx);
-                    pulseSamplesX[did].push_back(xStrip->pulse);
-                    peakX[did].push_back(peakVal);
-                    totalChargeX[did].push_back(totalCharge); // using total charge instead of peak value
-                    peakSampleX[did].push_back(peakSample);
                 }
             }
+
             for(int ky = 0; ky < map_y_bins; ky++) {
                 GEMStrip* yStrip = gemMap[did].GetYStrip(ky);
                 GetPedestal(yStrip->pulse);
-                ADCConvert(fADCPedestal, fADCGain, fADCBits, yStrip->pulse);
-                double peakVal = 0.;
-                int peakSample = -1;
-                double totalCharge = 0.;
+                ADCConvert(0., 1., 12, yStrip->pulse);
+
+                Double_t peakVal = 0.;
+                Double_t totalCharge = 0.;
+                Int_t peakSample = -1;
                 for(int t = 0; t < samplingNum; t++){
                     totalCharge += yStrip->pulse[t];
                     if(yStrip->pulse[t] > peakVal){
@@ -442,19 +581,28 @@ void GEMdig() {
                         peakSample = t;
                     }
                 }
-                if(peakVal > fADCThreshold && totalCharge > fChargeThreshold) {
+
+                if(peakVal > fADCThreshold &&
+                   totalCharge > fChargeThreshold) {
+                    const Int_t firedIndex = fireNumY[did];
+                    stripNumberY[did][firedIndex] = ky;
+                    for(int t = 0; t < samplingNum; t++) {
+                        pulseSamplesY[did][firedIndex][t] = yStrip->pulse[t];
+                    }
+                    peakYOut[did][firedIndex] = peakVal;
+                    totalChargeY[did][firedIndex] = totalCharge;
+                    peakSampleY[did][firedIndex] = peakSample;
                     fireNumY[did]++;
-                    stripNumberY[did].push_back(ky);
-                    pulseSamplesY[did].push_back(yStrip->pulse);
-                    peakY[did].push_back(peakVal);
-                    totalChargeY[did].push_back(totalCharge); // using total charge instead of peak value
-                    peakSampleY[did].push_back(peakSample);
                 }
             }
         }
+
         outputEventNum = i;
         FiredStripsT->Fill();
     }
+
+    FiredStripsT->Write();
+    FiredStripsF->Close();
 
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end - start;
