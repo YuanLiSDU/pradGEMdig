@@ -40,6 +40,9 @@ const Double_t samplingTime = 25.; // ns
 const Double_t fTriggerJitter = 10.; // ns
 const Double_t fAPVTimeJitter = 25.; // ns
 
+Double_t fADCThreshold = 30.; // peak ADC threshold
+Double_t fChargeThreshold = 60.; // charge threshold
+
 // Variables
 struct IonPar_t {
     Double_t Xp; // position of the point on the projection
