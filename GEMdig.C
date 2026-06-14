@@ -14,7 +14,6 @@
 #include "TVector3.h"
 
 #include "GEMdigVariables.h"
-#include "GEMAvalancheModel.h"
 #include "GEMIonModel.h"
 #include "GEMStripMap.h"
 
@@ -166,6 +165,7 @@ void GEMdig() {
             //for the one beam particle
             if( GasPTID[n] != 0 || GasZout[n] - GasZ[n] < 2.999) continue;
             int did = GasDID[n];
+            double t_hit = GasTime[n];
             double hitX[2], hitY[2], hitZ[2];
             if(did == 0 || did == 2){ 
                 hitX[0] = GasX[n]; hitY[0] = GasY[n]; hitZ[0] = GasZ[n];
@@ -188,7 +188,15 @@ void GEMdig() {
             trigger_jitter=0.;
 
             // to get the region of interest for the ion, only sum the charge on these strips to save time
-            GEMStripRegion region = findRegion(gemMap[did], fRIon[0].Xp, fRIon[0].Yp, activeStripNhalf);
+            //get the mean position of the ion distribution on the readout plane as the hit position
+            double hitX_mean = 0, hitY_mean = 0;
+            for(auto& ion : fRIon) {
+                hitX_mean += ion.Xp;
+                hitY_mean += ion.Yp;
+            }
+            hitX_mean /= fRIon.size();
+            hitY_mean /= fRIon.size();
+            GEMStripRegion region = findRegion(gemMap[did], hitX_mean, hitY_mean, activeStripNhalf);
             if(!region.IsValid()) continue;
 
             //Simulate the avalanche and get the total charge on each strip
@@ -238,13 +246,14 @@ void GEMdig() {
                     Charge *= area;
                     yStrip->charge += Charge;
                 }
+                delete integrateMap;
             }
             //Simulate the pulse shape and get the ADC value for each strip this particle hits
-            double startTime = minTravelT + trigger_jitter - 5.; // -5ns (trigger lattency) to move the pulse to the left 
+            double startTime = t_hit + minTravelT + trigger_jitter - 5.; // -5ns (trigger lattency) to move the pulse to the left 
             for(int kx = region.lowX_strip; kx <= region.upX_strip; kx++) {
                 GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
                 for(int t = 0; t < samplingNum; t++){
-                    double time = double(t+0.5) * samplingTime + startTime;
+                    double time = double(t+0.5) * samplingTime - startTime;
                     xStrip->pulse[t] += PulseShape(time, xStrip->charge, pulseTimeLength);
                 }
                 xStrip->charge = 0; // clear charge after getting the pulse
@@ -252,7 +261,7 @@ void GEMdig() {
             for(int ky = region.lowY_strip; ky <= region.upY_strip; ky++) {
                 GEMStrip* yStrip = gemMap[did].GetYStrip(ky);
                 for(int t = 0; t < samplingNum; t++){
-                    double time = double(t+0.5) * samplingTime + startTime;
+                    double time = double(t+0.5) * samplingTime - startTime;
                     yStrip->pulse[t] += PulseShape(time, yStrip->charge, pulseTimeLength);
                 }
                 yStrip->charge = 0; // clear charge after getting the pulse
@@ -269,6 +278,7 @@ void GEMdig() {
 
             for(int n = 0; n < GasN; n++){
                 int did = GasDID[n];
+                double t_hit = GasTime[n] + t0;
                 double hitX[2], hitY[2], hitZ[2];
                 if(did == 0 || did == 2){ 
                     hitX[0] = GasX[n]; hitY[0] = GasY[n]; hitZ[0] = GasZ[n];
@@ -318,6 +328,10 @@ void GEMdig() {
                             integrateMap->SetBinContent(ix, iy, result); //the charge deposit in each small area, charge / mm^2
                         }
                     }
+                    //Get integrated charge for each blocks then rebin to the strip width
+                    integrateMap->RebinX(stripStep);
+                    integrateMap->RebinY(stripStep);
+
                     for(int kx = region.lowX_strip; kx <= region.upX_strip; kx++) {
                         GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
                         Double_t Charge = 0.;
@@ -336,13 +350,14 @@ void GEMdig() {
                         Charge *= area;
                         yStrip->charge += Charge;
                     }
+                    delete integrateMap;
                 }
                 //Simulate the pulse shape and get the ADC value for each strip this particle hits
-                double startTime = minTravelT + trigger_jitter - 5. + t0; // -5ns (trigger lattency) to move the pulse to the left
+                double startTime = t_hit + minTravelT + trigger_jitter - 5.; // -5ns (trigger lattency) to move the pulse to the left
                 for(int kx = region.lowX_strip; kx <= region.upX_strip; kx++) {
                     GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
                     for(int t = 0; t < samplingNum; t++){
-                        double time = double(t+0.5) * samplingTime + startTime;
+                        double time = double(t+0.5) * samplingTime - startTime;
                         xStrip->pulse[t] += PulseShape(time, xStrip->charge, pulseTimeLength);
                     }
                     xStrip->charge = 0; // clear charge after getting the pulse
@@ -350,7 +365,7 @@ void GEMdig() {
                 for(int ky = region.lowY_strip; ky <= region.upY_strip; ky++) {
                     GEMStrip* yStrip = gemMap[did].GetYStrip(ky);
                     for(int t = 0; t < samplingNum; t++){
-                        double time = double(t+0.5) * samplingTime + startTime;
+                        double time = double(t+0.5) * samplingTime - startTime;
                         yStrip->pulse[t] += PulseShape(time, yStrip->charge, pulseTimeLength);
                     }
                     yStrip->charge = 0; // clear charge after getting the pulse

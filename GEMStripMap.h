@@ -33,8 +33,8 @@
  * Num_half = 6 normally gives 13 strips in each direction. The region is
  * clipped at the map boundaries:
  *
- *     GEMStripMap::GEMStripRegion region =
- *         stripMap.findRegion(stripMap, x, y, 6);
+ *     GEMStripRegion region =
+ *         findRegion(stripMap, x, y, 6);
  *
  *     if (region.IsValid()) {
  *         Int_t firstXStrip = region.lowX_strip;
@@ -87,6 +87,24 @@
 enum class GEMStripDirection {
     X,
     Y
+};
+
+struct GEMStripRegion {
+    Int_t lowX_strip = -1;
+    Int_t lowY_strip = -1;
+    Int_t upX_strip = -1;
+    Int_t upY_strip = -1;
+
+    Double_t xLow = 0.;
+    Double_t xHigh = 0.;
+    Double_t yLow = 0.;
+    Double_t yHigh = 0.;
+
+    bool IsValid() const
+    {
+        return lowX_strip >= 0 && lowY_strip >= 0 && upX_strip >= lowX_strip && upY_strip >= lowY_strip &&
+            xHigh > xLow && yHigh > yLow;
+    }
 };
 
 struct GEMStrip {
@@ -173,64 +191,6 @@ public:
         ClearStrips(yStrips);
     }
 
-    struct GEMStripRegion {
-        Int_t lowX_strip = -1;
-        Int_t lowY_strip = -1;
-        Int_t upX_strip = -1;
-        Int_t upY_strip = -1;
-
-        Double_t xLow = 0.;
-        Double_t xHigh = 0.;
-        Double_t yLow = 0.;
-        Double_t yHigh = 0.;
-
-        bool IsValid() const
-        {
-            return lowX_strip >= 0 && lowY_strip >= 0 && upX_strip >= lowX_strip && upY_strip >= lowY_strip &&
-                xHigh > xLow && yHigh > yLow;
-        }
-    };
-
-    inline GEMStripRegion findRegion(
-        GEMStripMap& gemStripMap, Double_t x, Double_t y, Int_t Num_half)
-    {
-        if(Num_half < 0) return {};
-
-        const GEMStrip* centerXStrip = gemStripMap.FindXStrip(x);
-        const GEMStrip* centerYStrip = gemStripMap.FindYStrip(y);
-        if(centerXStrip == nullptr || centerYStrip == nullptr) return {};
-
-        GEMStripRegion region;
-        region.lowX_strip = centerXStrip->stripNumber - Num_half;
-        region.lowY_strip = centerYStrip->stripNumber - Num_half;
-        region.upX_strip = centerXStrip->stripNumber + Num_half;
-        region.upY_strip = centerYStrip->stripNumber + Num_half;
-
-        if(region.lowX_strip < 0) region.lowX_strip = 0;
-        if(region.lowY_strip < 0) region.lowY_strip = 0;
-        if(region.upX_strip >= map_x_bins) region.upX_strip = map_x_bins - 1;
-        if(region.upY_strip >= map_y_bins) region.upY_strip = map_y_bins - 1;
-
-        const GEMStrip* leftStrip = gemStripMap.GetXStrip(region.lowX_strip);
-        const GEMStrip* rightStrip = gemStripMap.GetXStrip(region.upX_strip);
-        const GEMStrip* bottomStrip = gemStripMap.GetYStrip(region.lowY_strip);
-        const GEMStrip* topStrip = gemStripMap.GetYStrip(region.upY_strip);
-        if(leftStrip == nullptr || rightStrip == nullptr ||
-        bottomStrip == nullptr || topStrip == nullptr) {
-            return {};
-        }
-
-        region.xLow =
-            leftStrip->position - stripWidth / 2.;
-        region.xHigh =
-            rightStrip->position + stripWidth / 2.;
-        region.yLow =
-            bottomStrip->position - stripWidth / 2.;
-        region.yHigh =
-            topStrip->position + stripWidth / 2.;
-        return region;
-    }
-
 private:
     Int_t detectorId;
     std::vector<GEMStrip> xStrips;
@@ -297,5 +257,41 @@ private:
         }
     }
 };
+
+inline GEMStripRegion findRegion(
+    GEMStripMap& gemStripMap, Double_t x, Double_t y, Int_t Num_half)
+{
+    if(Num_half < 0) return {};
+
+    const GEMStrip* centerXStrip = gemStripMap.FindXStrip(x);
+    const GEMStrip* centerYStrip = gemStripMap.FindYStrip(y);
+    if(centerXStrip == nullptr || centerYStrip == nullptr) return {};
+
+    GEMStripRegion region;
+    region.lowX_strip = centerXStrip->stripNumber - Num_half;
+    region.lowY_strip = centerYStrip->stripNumber - Num_half;
+    region.upX_strip = centerXStrip->stripNumber + Num_half;
+    region.upY_strip = centerYStrip->stripNumber + Num_half;
+
+    if(region.lowX_strip < 0) region.lowX_strip = 0;
+    if(region.lowY_strip < 0) region.lowY_strip = 0;
+    if(region.upX_strip >= map_x_bins) region.upX_strip = map_x_bins - 1;
+    if(region.upY_strip >= map_y_bins) region.upY_strip = map_y_bins - 1;
+
+    const GEMStrip* leftStrip = gemStripMap.GetXStrip(region.lowX_strip);
+    const GEMStrip* rightStrip = gemStripMap.GetXStrip(region.upX_strip);
+    const GEMStrip* bottomStrip = gemStripMap.GetYStrip(region.lowY_strip);
+    const GEMStrip* topStrip = gemStripMap.GetYStrip(region.upY_strip);
+    if(leftStrip == nullptr || rightStrip == nullptr ||
+       bottomStrip == nullptr || topStrip == nullptr) {
+        return {};
+    }
+
+    region.xLow = leftStrip->position - stripWidth / 2.;
+    region.xHigh = rightStrip->position + stripWidth / 2.;
+    region.yLow = bottomStrip->position - stripWidth / 2.;
+    region.yHigh = topStrip->position + stripWidth / 2.;
+    return region;
+}
 
 #endif
