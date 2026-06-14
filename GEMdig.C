@@ -340,7 +340,7 @@ void GEMdig() {
 
     double validEntries = 0;
     for(int i=0;i<1000;i++) { //max 9000 for 4um
-        if (i%100 == 0) cout << "start " << i << "r" << flush;        
+        if (i%100 == 0) cout << "start " << i << "\r" << flush;        
 
         //clear strip ADC information for each event
         for(int did = 0; did < 4; did++){
@@ -503,6 +503,7 @@ void GEMdig() {
 
             for(int kx = 0; kx < map_x_bins; kx++) {
                 GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
+                if(xStrip->pulse[2] < 5.) continue; // skip strips with very low signal to save time
                 GetPedestal(xStrip->pulse);
                 ADCConvert(0., 1., 12, xStrip->pulse);
 
@@ -533,6 +534,7 @@ void GEMdig() {
 
             for(int ky = 0; ky < map_y_bins; ky++) {
                 GEMStrip* yStrip = gemMap[did].GetYStrip(ky);
+                if(yStrip->pulse[2] < 5.) continue; // skip strips with very low signal to save time
                 GetPedestal(yStrip->pulse);
                 ADCConvert(0., 1., 12, yStrip->pulse);
 
