@@ -266,7 +266,99 @@ void GEMdig() {
         for(int ii=i*bg_entry; ii<(i+1)*bg_entry; ii++) {
             background.GetEntry(ii);
             Double_t t0 = gRandom->Uniform(-200., 6.*25.);
+
+            for(int n = 0; n < GasN; n++){
+                int did = GasDID[n];
+                double hitX[2], hitY[2], hitZ[2];
+                if(did == 0 || did == 2){ 
+                    hitX[0] = GasX[n]; hitY[0] = GasY[n]; hitZ[0] = GasZ[n];
+                    hitX[1] = GasXout[n]; hitY[1] = GasYout[n]; hitZ[1] = GasZout[n];
+                }
+                if(did == 1 || did == 3){ 
+                    hitX[0] = -GasX[n]; hitY[0] = GasY[n]; hitZ[0] = GasZ[n];
+                    hitX[1] = -GasXout[n]; hitY[1] = GasYout[n]; hitZ[1] = GasZout[n];
+                }
+
+                TVector3 in(hitX[0], hitY[0], hitZ[0]);
+                TVector3 out(hitX[1], hitY[1], hitZ[1]);
+                IonModel(in, out, GasEdep[n]);
+                if(fRIon.empty()) continue;
+
+                //Simulate the DAQ and trigger jitter
+                Double_t trigger_jitter = gRandom->Gaus(0, fTriggerJitter);
+                Double_t apvJitter = (gRandom->Uniform(fAPVTimeJitter) - fAPVTimeJitter/2.);
+                trigger_jitter += apvJitter;
+                trigger_jitter=0.;
+
+                // to get the region of interest for the ion, only sum the charge on these strips to save time
+                GEMStripRegion region = findRegion(gemMap[did], fRIon[0].Xp, fRIon[0].Yp, activeStripNhalf);
+                if(!region.IsValid()) continue;
+
+                //Simulate the avalanche and get the total charge on each strip
+                for(auto& ion : fRIon) {
+                    //calculate the charge distribution on the strip plane
+                    int stripStep = 6;
+                    int xStripN = region.upX_strip + 1 - region.lowX_strip;
+                    int yStripN = region.upY_strip + 1 - region.lowY_strip;
+                    int xBinN = xStripN * stripStep;
+                    int yBinN = yStripN * stripStep;
+                    Double_t area = 0.4*0.4/stripStep/stripStep;
+                    TH2D *integrateMap = new TH2D("inegrate map", "integrate map",
+                        xBinN, region.xLow, region.xHigh,
+                        yBinN, region.yLow, region.yHigh);
+                    
+                    Double_t eff_sigma = ion.eff_sigma;
+                    for(int ix = 1; ix <= xBinN; ix++){
+                        Double_t dx = ion.Xp - integrateMap->GetXaxis()->GetBinCenter(ix);
+                        Double_t dx2 = dx * dx;
+                        for(int iy = 1; iy <= yBinN; iy++){
+                            Double_t dy = ion.Yp - integrateMap->GetYaxis()->GetBinCenter(iy);
+                            Double_t dy2 = dy * dy;
+                            Double_t result = fAvaGain * ion.ggnorm * (1./(TMath::Pi()*eff_sigma)) * (eff_sigma*eff_sigma) / ((dx2+dy2) + eff_sigma*eff_sigma);
+                            integrateMap->SetBinContent(ix, iy, result); //the charge deposit in each small area, charge / mm^2
+                        }
+                    }
+                    for(int kx = region.lowX_strip; kx <= region.upX_strip; kx++) {
+                        GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
+                        Double_t Charge = 0.;
+                        for(int yy = 1; yy <= yBinN/stripStep; yy++){
+                            Charge += integrateMap->GetBinContent(kx - region.lowX_strip + 1, yy);
+                        }
+                        Charge *= area;
+                        xStrip->charge += Charge;
+                    }
+                    for(int ky = region.lowY_strip; ky <= region.upY_strip; ky++) {
+                        GEMStrip* yStrip = gemMap[did].GetYStrip(ky);
+                        Double_t Charge = 0.;
+                        for(int xx = 1; xx <= xBinN/stripStep; xx++){
+                            Charge += integrateMap->GetBinContent(xx, ky - region.lowY_strip + 1);
+                        }
+                        Charge *= area;
+                        yStrip->charge += Charge;
+                    }
+                }
+                //Simulate the pulse shape and get the ADC value for each strip this particle hits
+                double startTime = minTravelT + trigger_jitter - 5. + t0; // -5ns (trigger lattency) to move the pulse to the left
+                for(int kx = region.lowX_strip; kx <= region.upX_strip; kx++) {
+                    GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
+                    for(int t = 0; t < samplingNum; t++){
+                        double time = double(t+0.5) * samplingTime + startTime;
+                        xStrip->pulse[t] += PulseShape(time, xStrip->charge, pulseTimeLength);
+                    }
+                    xStrip->charge = 0; // clear charge after getting the pulse
+                }
+                for(int ky = region.lowY_strip; ky <= region.upY_strip; ky++) {
+                    GEMStrip* yStrip = gemMap[did].GetYStrip(ky);
+                    for(int t = 0; t < samplingNum; t++){
+                        double time = double(t+0.5) * samplingTime + startTime;
+                        yStrip->pulse[t] += PulseShape(time, yStrip->charge, pulseTimeLength);
+                    }
+                    yStrip->charge = 0; // clear charge after getting the pulse
+                }
+                bg++;
+            }
         }
+        // Already have the pulse shape for each strip, now convert to ADC value, add pedestal noise, threshold cut, and save the results
     }
 
     auto end = std::chrono::high_resolution_clock::now();
