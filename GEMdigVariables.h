@@ -52,9 +52,7 @@ struct IonPar_t {
 };
 
 std::vector<IonPar_t> fRIon;
-Double_t Num_ions; // number of ions
 Double_t minTravelT = 1000000.;
-Int_t lowX, lowY, upX, upY;
 
 // Parameters in ROOT file
 Int_t GasN, EventID;
