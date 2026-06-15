@@ -24,6 +24,57 @@ using std::cout;
 using std::endl;
 using std::string;
 
+struct EntryCounts {
+    Long64_t ndata = 0;
+    Long64_t nbg = 0;
+    Int_t bgEntry = 0;
+};
+
+EntryCounts Rsolve_bgEntry(TChain* signal, TChain* bg, int bgFiles){
+    // 8.0175e-04 inverse picobarn for 1e6 events
+    double luminosity = 8.0175e-06; // pb^-1, 1e4 events
+    double C_density = 2.267; // g/cm3, density of carbon
+    double C_targetThickness = 1.e-4; // cm, 1 um carbon target
+    double C_molarMass = 12.011; // g/mol
+    double AvogadroConstant = 6.02214076e23; // mol^-1
+    double C_arealDensity =
+        C_density * C_targetThickness / C_molarMass * AvogadroConstant; // nuclei/cm2
+    double beamN_signal = luminosity * 1.e36 / C_arealDensity;
+
+    Long64_t Ndata = signal->GetEntries();
+    const Long64_t availableNbg = bg->GetEntries();
+    cout << "Number of entries in all signal data: " << Ndata << endl;
+    cout << "Number of entries in all background data: "
+         << availableNbg << endl;
+
+    if(Ndata <= 0 || availableNbg <= 0 || bgFiles <= 0) return {};
+
+    bg->GetEntry(availableNbg - 1);
+    const double beamN_bg =
+        static_cast<double>(EventID) * bgFiles;
+    cout << "signal beamN: " << beamN_signal << endl;
+    cout << "background beamN: " << beamN_bg << endl;
+    if(beamN_bg <= 0.) return {};
+
+    const double beam_current = 5.; // nA
+    const double beam_rate =
+        beam_current * 1.e-9 / 1.602176634e-19; // Hz
+    const double beamN_window =
+        350. * 1.e-9 * beam_rate; // beam particles in a 350 ns window
+    const Int_t bgEntry = static_cast<Int_t>(
+        static_cast<double>(availableNbg) / beamN_bg * 10. * beamN_window);
+
+    Long64_t Nbg = Ndata * static_cast<Long64_t>(bgEntry);
+    if(Nbg > availableNbg) {
+        cout << "Not enough background entries." << endl;
+        Ndata = availableNbg / bgEntry;
+        Nbg = Ndata * static_cast<Long64_t>(bgEntry);
+        cout << "Use " << Ndata << " signal entries and " << Nbg << " background entries." << endl;
+    }
+
+    return {Ndata, Nbg, bgEntry};
+}
+
 std::vector<string> FindRootFiles(const string& folder,
                                   const string& filenameKeyword)
 {
@@ -153,18 +204,6 @@ void AccumulateIonCharge(GEMStripMap& gemStripMap,
     }
 }
 
-void SetTH2D(TH2D* hist) {
-    hist->GetXaxis()->SetTitle("sample (25ns)");
-    hist->GetYaxis()->SetTitle("strip number");
-    hist->GetZaxis()->SetTitle("ADC");
-    //hist->GetZaxis()->SetRangeUser(0., 2000.);
-    hist->GetXaxis()->SetTitleOffset(1.7);
-    hist->GetYaxis()->SetTitleOffset(1.7);
-    hist->GetZaxis()->SetTitleOffset(1.5);
-    hist->GetXaxis()->CenterTitle();
-    hist->GetYaxis()->CenterTitle();
-}
-
 void loadFile(TChain& file, string filename) {
     file.Add(filename.c_str());
     file.SetBranchAddress("EventID", &EventID);
@@ -191,7 +230,7 @@ void GEMdig() {
 
 
     std::vector<string> signalFiles =
-        FindRootFiles("data", "signal");
+        FindRootFiles("2105", "signal");
     std::vector<string> backgroundFiles =
         FindRootFiles("2105", "simrun");
     TChain signal("T");
@@ -204,16 +243,13 @@ void GEMdig() {
         loadFile(background, filename);
     }
     
-    const int Ndata = signal.GetEntries();
-    const int Nbg = background.GetEntries();
-    cout << "Number of entries in all signal data: " << Ndata << endl;
-    cout << "Number of entries in all background data: " << Nbg << endl;
-    background.GetEntry(Nbg-1);
-    double fluxN_bg = EventID * backgroundFiles.size() * 10.;
-    cout << "background flux (Hz): " << fluxN_bg << endl;
-    int bg_entry = int(double(Nbg) / fluxN_bg * 312.5/4. * 350.);
-    cout << "background entry numbers for each event: " << bg_entry << endl;
-    bg_entry = 2.;
+    const EntryCounts entryCounts =
+        Rsolve_bgEntry(
+            &signal, &background, static_cast<int>(backgroundFiles.size()));
+    const Long64_t Ndata = entryCounts.ndata;
+    const Long64_t Nbg = entryCounts.nbg;
+    const Int_t bg_entry = entryCounts.bgEntry;
+    cout << "Background entries per signal event: " << bg_entry << endl;
     TH1D *peak = new TH1D("peak", "peak of the pulse", 100, 0, 5000);
     TH1D *peakY = new TH1D("peakY", "peakY of the pulse", 100, 0, 5000);
     TH2D *adc_Num = new TH2D("adc_Num", "Pulse Amplitude vs Fired Strip Number", 40, 0, 4000, 11, 0-0.5, 11-0.5);
@@ -339,15 +375,14 @@ void GEMdig() {
     for(int did = 0; did < 4; did++) gemMap[did] = GEMStripMap(did);
 
     double validEntries = 0;
-    for(int i=0;i<1000;i++) { //max 9000 for 4um
-        if (i%100 == 0) cout << "start " << i << "\r" << flush;        
+    for(int i=0;i<100;i++) { //max 9000 for 4um
+        if (i%5 == 0) cout << "start " << i << "\r" << flush;        
 
         //clear strip ADC information for each event
         for(int did = 0; did < 4; did++){
             gemMap[did].Clear();
         }
 
-        /*
         signal.GetEntry(i);
         
         int sig = 0;
@@ -414,7 +449,7 @@ void GEMdig() {
             sig++;
         }
         if(sig < 1) continue;
-        */
+
         validEntries++;
         //for the background particles
         int bg = 0;
