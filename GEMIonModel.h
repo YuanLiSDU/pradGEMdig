@@ -113,7 +113,7 @@ inline void IonModel(TVector3& in, TVector3& out, const Double_t Edep) {
 
         //Get total charge of one primary ion pair after avalanche
         //Double_t Charge = gRandom->Exp(gain_mean); // exponential distribution of the charge
-        Double_t Gain0 = 20.;
+        Double_t Gain0 = 40.;
         Double_t Charge = gRandom->Gaus(gain_mean, gain_mean/sqrt(Gain0)); // Gaussian distribution of the charge
         if(Charge < 0.) Charge = 0.;
         IonPar_t ip;
@@ -125,6 +125,8 @@ inline void IonModel(TVector3& in, TVector3& out, const Double_t Edep) {
         ip.Ttime = Time * 1.e+3; // convert to ns
         minTravelT = TMath::Min(minTravelT, ip.Ttime);
         ip.ggnorm = ip.Charge * TMath::InvPi() / pow(Spatial_sigma*fSNormNsigma, 2.);
+
+        ip.R2 = Spatial_sigma * Spatial_sigma * fSNormNsigma * fSNormNsigma;
 
         fRIon.push_back(ip);
         //cout << "X: " << ionPos.X() << " Y: " << ionPos.Y() << " Charge: " << Charge << " time: " << ip.Ttime << " Spatial sigma: " << ip.S_sigma << endl;

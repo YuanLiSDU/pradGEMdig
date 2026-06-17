@@ -114,6 +114,8 @@ struct GEMStrip {
     Double_t position = 0.; // Center position in the X or Y direction, mm
     Double_t activeRegionHalfWidth = stripWidth / 2.; // Active region: position +/- this value, mm
 
+    Double_t pedestal_line = 0.; // Baseline ADC value for the strip
+
     Double_t charge = 0.; // Total charge on the strip
     std::array<Double_t, samplingNum> pulse = {};
     Double_t peakADC = 0.;
@@ -206,6 +208,7 @@ private:
             strip.stripNumber = stripNumber;
             strip.position =
                 map_x_low + (static_cast<Double_t>(stripNumber) + 0.5) * stripWidth;
+            strip.pedestal_line = gRandom->Gaus(200., 40.); // Initialize the baseline ADC value for the strip with a Gaussian distribution
         }
 
         yStrips.resize(map_y_bins);
@@ -216,6 +219,7 @@ private:
             strip.stripNumber = stripNumber;
             strip.position =
                 map_y_low + (static_cast<Double_t>(stripNumber) + 0.5) * stripWidth;
+            strip.pedestal_line = gRandom->Gaus(200., 40.); // Initialize the baseline ADC value for the strip
         }
     }
 

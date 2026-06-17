@@ -139,10 +139,10 @@ void ADCConvert(Double_t off, Double_t gain, Int_t bits,
     for(int n=0; n<samplingNum; n++){
         Double_t val = pulseXorY[n];
         if( val < 0.) val = 0.;
-        Double_t vvv = (val - off)/gain;
+        Double_t vvv = (val + off)/gain;
         Double_t saturation = static_cast<Double_t>( (1<<bits)-1 );
-        //saturation = 1400.;
         if( vvv > saturation ) vvv = saturation;
+        vvv -= off;
         Double_t dval =
             static_cast<Double_t>( TMath::Floor( (vvv>saturation) ? saturation : vvv ));
         if( dval < 0 ) dval = 0;
@@ -169,6 +169,7 @@ void AccumulateIonCharge(GEMStripMap& gemStripMap,
     const Double_t xBinWidth = (region.xHigh - region.xLow) / xBinN;
     const Double_t yBinWidth = (region.yHigh - region.yLow) / yBinN;
     const Double_t area = xBinWidth * yBinWidth;
+    constexpr Int_t edgeDeadSteps = 0; //stripStep / 4;
     const Double_t effSigma2 = ion.eff_sigma * ion.eff_sigma;
     const Double_t normalization =
         fAvaGain * ion.ggnorm / (TMath::Pi() * ion.eff_sigma);
@@ -179,16 +180,25 @@ void AccumulateIonCharge(GEMStripMap& gemStripMap,
         const Double_t dx = ion.Xp - xCenter;
         const Double_t dx2 = dx * dx;
         const Int_t xStripIndex = ix / stripStep;
+        const Int_t xStepInStrip = ix % stripStep;
+        const bool xStepActive =
+            xStepInStrip >= edgeDeadSteps &&
+            xStepInStrip < stripStep - edgeDeadSteps;
 
         for(Int_t iy = 0; iy < yBinN; ++iy) {
             const Double_t yCenter =
                 region.yLow + (static_cast<Double_t>(iy) + 0.5) * yBinWidth;
             const Double_t dy = ion.Yp - yCenter;
+            if(dx2 + dy * dy > 1.7 * ion.R2) continue; // only consider bins within 3 sigma
+            const Int_t yStepInStrip = iy % stripStep;
+            const bool yStepActive =
+                yStepInStrip >= edgeDeadSteps &&
+                yStepInStrip < stripStep - edgeDeadSteps;
             const Double_t density =
                 normalization * effSigma2 / (dx2 + dy * dy + effSigma2);
 
-            stripChargeX[xStripIndex] += density;
-            stripChargeY[iy / stripStep] += density;
+            if(xStepActive) stripChargeX[xStripIndex] += density;
+            if(yStepActive) stripChargeY[iy / stripStep] += density;
         }
     }
 
@@ -248,11 +258,17 @@ void GEMdig() {
             &signal, &background, static_cast<int>(backgroundFiles.size()));
     const Long64_t Ndata = entryCounts.ndata;
     const Long64_t Nbg = entryCounts.nbg;
-    const Int_t bg_entry = entryCounts.bgEntry;
+    Int_t bg_entry = entryCounts.bgEntry;
+    
     cout << "Background entries per signal event: " << bg_entry << endl;
-    TH1D *peak = new TH1D("peak", "peak of the pulse", 100, 0, 5000);
-    TH1D *peakY = new TH1D("peakY", "peakY of the pulse", 100, 0, 5000);
-    TH2D *adc_Num = new TH2D("adc_Num", "Pulse Amplitude vs Fired Strip Number", 40, 0, 4000, 11, 0-0.5, 11-0.5);
+    TH1D *peakX_signal = new TH1D("peakX_signal", "peakX of the pulse", 250/2, 0, 2500);
+    TH1D *peakY_signal = new TH1D("peakY_signal", "peakY of the pulse", 250/2, 0, 2500);
+    TH1D *chargeX_signal = new TH1D("chargeX_signal", "total charge on X strips", 500/2, 0, 5000);
+    TH1D *chargeY_signal = new TH1D("chargeY_signal", "total charge on Y strips", 500/2, 0, 5000);
+    TH1D *maxBinX_signal = new TH1D("maxBinX_signal", "max sample bin of the pulse X", samplingNum, 0, samplingNum);
+    TH1D *maxBinY_signal = new TH1D("maxBinY_signal", "max sample bin of the pulse Y", samplingNum, 0, samplingNum);
+    TH1D *clusterSizeX_signal = new TH1D("clusterSizeX_signal", "cluster size of X strips", 15, 0.5, 15.5);
+    TH1D *clusterSizeY_signal = new TH1D("clusterSizeY_signal", "cluster size of Y strips", 15, 0.5, 15.5);
 
     TH1D *Occupancy_X[4];
     TH1D *Occupancy_Y[4];
@@ -373,9 +389,10 @@ void GEMdig() {
 
     GEMStripMap gemMap[4]; // strip map for the four chambers, indexed by detector ID
     for(int did = 0; did < 4; did++) gemMap[did] = GEMStripMap(did);
+    int totalEvent[4] = {0, 0, 0, 0}, validEvent[4] = {0, 0, 0, 0}; 
 
     double validEntries = 0;
-    for(int i=0;i<100;i++) { //max 9000 for 4um
+    for(int i=0;i<Ndata;i++) { //max 9000 for 4um
         if (i%5 == 0) cout << "start " << i << "\r" << flush;        
 
         //clear strip ADC information for each event
@@ -410,7 +427,6 @@ void GEMdig() {
             Double_t trigger_jitter = gRandom->Gaus(0, fTriggerJitter);
             Double_t apvJitter = (gRandom->Uniform(fAPVTimeJitter) - fAPVTimeJitter/2.);
             trigger_jitter += apvJitter;
-            trigger_jitter=0.;
 
             // to get the region of interest for the ion, only sum the charge on these strips to save time
             //get the mean position of the ion distribution on the readout plane as the hit position
@@ -429,7 +445,7 @@ void GEMdig() {
                 AccumulateIonCharge(gemMap[did], region, ion);
             }
             //Simulate the pulse shape and get the ADC value for each strip this particle hits
-            double startTime = t_hit + minTravelT + trigger_jitter - 5.; // -5ns (trigger lattency) to move the pulse to the left 
+            double startTime = t_hit + minTravelT + trigger_jitter - 120.; // -5ns (trigger lattency) to move the pulse to the left
             for(int kx = region.lowX_strip; kx <= region.upX_strip; kx++) {
                 GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
                 for(int t = 0; t < samplingNum; t++){
@@ -447,8 +463,68 @@ void GEMdig() {
                 yStrip->charge = 0; // clear charge after getting the pulse
             }
             sig++;
+            totalEvent[did]++;
         }
         if(sig < 1) continue;
+
+        //fill the histograms for signal particles
+        for(int did = 0; did < 4; did++){
+            vector<double> StripPeaksX;
+            vector<double> StripChargesX;
+            int fireX = 0;
+            for(int kx = 0; kx < map_x_bins; kx++){
+                GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
+                if(xStrip->pulse[2] < 5.) continue;
+                GetPedestal(xStrip->pulse);
+                ADCConvert(xStrip->pedestal_line, 1., 11, xStrip->pulse);
+                double peak = *std::max_element(xStrip->pulse.begin(), xStrip->pulse.end());
+                double totalCharge = std::accumulate(xStrip->pulse.begin(), xStrip->pulse.end(), 0.);
+                int peakSample = std::distance(xStrip->pulse.begin(), std::max_element(xStrip->pulse.begin(), xStrip->pulse.end()));
+                if(peak > fADCThreshold && totalCharge > fChargeThreshold) {
+                    StripPeaksX.push_back(peak);
+                    StripChargesX.push_back(totalCharge);
+                    maxBinX_signal->Fill(peakSample);
+                    fireX++;
+                }
+            }
+            double eventPeakX = StripPeaksX.empty() ? 0. : *std::max_element(StripPeaksX.begin(), StripPeaksX.end());
+            double eventChargeX = StripChargesX.empty() ? 0. : *std::max_element(StripChargesX.begin(), StripChargesX.end());
+            if(eventPeakX > fADCThreshold && eventChargeX > fChargeThreshold) {
+                peakX_signal->Fill(eventPeakX);
+                chargeX_signal->Fill(eventChargeX);
+            }
+            clusterSizeX_signal->Fill(fireX);
+
+
+            vector<double> StripPeaksY;
+            vector<double> StripChargesY;
+            int fireY = 0;
+            for(int ky = 0; ky < map_y_bins; ky++){
+                GEMStrip* yStrip = gemMap[did].GetYStrip(ky);
+                if(yStrip->pulse[2] < 5.) continue;
+                GetPedestal(yStrip->pulse);
+                ADCConvert(yStrip->pedestal_line, 1., 11, yStrip->pulse);
+                double peak = *std::max_element(yStrip->pulse.begin(), yStrip->pulse.end());
+                double totalCharge = std::accumulate(yStrip->pulse.begin(), yStrip->pulse.end(), 0.);
+                int peakSample = std::distance(yStrip->pulse.begin(), std::max_element(yStrip->pulse.begin(), yStrip->pulse.end()));
+                if(peak > fADCThreshold && totalCharge > fChargeThreshold) {
+                    StripPeaksY.push_back(peak);
+                    StripChargesY.push_back(totalCharge);
+                    maxBinY_signal->Fill(peakSample);
+                    fireY++;
+                }
+            }
+            double eventPeakY = StripPeaksY.empty() ? 0. : *std::max_element(StripPeaksY.begin(), StripPeaksY.end());
+            double eventChargeY = StripChargesY.empty() ? 0. : *std::max_element(StripChargesY.begin(), StripChargesY.end());
+            if(eventPeakY > fADCThreshold && eventChargeY > fChargeThreshold) {
+                peakY_signal->Fill(eventPeakY);
+                chargeY_signal->Fill(eventChargeY);
+            }
+            clusterSizeY_signal->Fill(fireY);
+
+            if(fireX > 0 && fireY > 0)
+                validEvent[did]++;
+        }
 
         validEntries++;
         //for the background particles
@@ -490,7 +566,7 @@ void GEMdig() {
                     AccumulateIonCharge(gemMap[did], region, ion);
                 }
                 //Simulate the pulse shape and get the ADC value for each strip this particle hits
-                double startTime = t_hit + minTravelT + trigger_jitter - 5.; // -5ns (trigger lattency) to move the pulse to the left
+                double startTime = t_hit + minTravelT + trigger_jitter - 50.; // -5ns (trigger lattency) to move the pulse to the left
                 for(int kx = region.lowX_strip; kx <= region.upX_strip; kx++) {
                     GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
                     for(int t = 0; t < samplingNum; t++){
@@ -540,7 +616,7 @@ void GEMdig() {
                 GEMStrip* xStrip = gemMap[did].GetXStrip(kx);
                 if(xStrip->pulse[2] < 5.) continue; // skip strips with very low signal to save time
                 GetPedestal(xStrip->pulse);
-                ADCConvert(0., 1., 12, xStrip->pulse);
+                ADCConvert(xStrip->pedestal_line, 1., 11, xStrip->pulse);
 
                 Double_t peakVal = 0.;
                 Double_t totalCharge = 0.;
@@ -571,7 +647,7 @@ void GEMdig() {
                 GEMStrip* yStrip = gemMap[did].GetYStrip(ky);
                 if(yStrip->pulse[2] < 5.) continue; // skip strips with very low signal to save time
                 GetPedestal(yStrip->pulse);
-                ADCConvert(0., 1., 12, yStrip->pulse);
+                ADCConvert(yStrip->pedestal_line, 1., 11, yStrip->pulse);
 
                 Double_t peakVal = 0.;
                 Double_t totalCharge = 0.;
@@ -609,4 +685,45 @@ void GEMdig() {
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end - start;
     std::cout << "运行时间: " << diff.count() << " 秒" << std::endl;
+
+    for(int did = 0; did < 4; did++) {
+        std::cout << "Detector " << did << ": Total Events = " << totalEvent[did] << ", Valid Events = " << validEvent[did] << ", Efficiency: " << (totalEvent[did] > 0 ? static_cast<double>(validEvent[did]) / totalEvent[did] : 0.) << std::endl;
+    }
+
+    TCanvas *c1 = new TCanvas("c1", "Peak Distributions", 800, 600);
+    c1->Divide(2, 2);
+    c1->cd(1);
+    peakX_signal->Draw();
+    c1->cd(2);
+    peakY_signal->Draw();
+    c1->cd(3);
+    chargeX_signal->Draw();
+    c1->cd(4);
+    chargeY_signal->Draw();
+
+    TCanvas *c2 = new TCanvas("c2", "Max Sample Bin Distributions", 800, 600);
+    c2->Divide(2);
+    c2->cd(1);
+    maxBinX_signal->Draw();
+    c2->cd(2);
+    maxBinY_signal->Draw();
+
+    TCanvas *c3 = new TCanvas("c3", "Cluster Size Distributions", 800, 600);
+    c3->Divide(2, 1);
+    c3->cd(1);
+    clusterSizeX_signal->Draw();
+    c3->cd(2);
+    clusterSizeY_signal->Draw();
+
+    TFile *outputF = new TFile("output/GEMdig_output_test.root", "RECREATE");
+    outputF->cd();
+    peakX_signal->Write();
+    peakY_signal->Write();
+    chargeX_signal->Write();
+    chargeY_signal->Write();
+    maxBinX_signal->Write();
+    maxBinY_signal->Write();
+    clusterSizeX_signal->Write();
+    clusterSizeY_signal->Write();
+    outputF->Close();
 }

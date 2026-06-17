@@ -11,13 +11,13 @@
 Double_t GasIonE = 26.0; // eV, ionization energy of gas
 Double_t GasDriftVelocity = 55.; // from db: mm/us, drift velocity of gas
 Double_t GasLateralUncertainty = 0.; // mm, lateral uncertainty of avalanche center
-Double_t gain_mean = 41000.; // from db: mean gain of the GEM, 4500
+Double_t gain_mean = 750.; // from db: mean gain of the GEM, 4500
 Double_t GasDiffusion = 0.1; // mm2/us, gas diffusion coefficient after avalanche
-Double_t fSNormNsigma = 18.0;
+Double_t fSNormNsigma = 7.0;
 Double_t fAvaGain = 54.;
 
 // GEM
-const Int_t activeStripNhalf = 6;
+const Int_t activeStripNhalf = 5;
 Double_t Zreadout = 2.0 + 2.0 + 2.0 + 180. * 1.e-3; // mm, distance from the first GEM foil Cu
 const Double_t stripWidth = 0.4; // mm
 Double_t pulseTimeLength = 56.; // ns, 50, 56
@@ -52,6 +52,7 @@ struct IonPar_t {
     Double_t Ttime; // traveling time of the ion
     Double_t ggnorm;
     Double_t eff_sigma;
+    Double_t R2;
 };
 
 std::vector<IonPar_t> fRIon;
