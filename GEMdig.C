@@ -56,13 +56,13 @@ EntryCounts Rsolve_bgEntry(TChain* signal, TChain* bg, int bgFiles){
     cout << "background beamN: " << beamN_bg << endl;
     if(beamN_bg <= 0.) return {};
 
-    const double beam_current = 5.; // nA
+    const double beam_current = 20.; // nA
     const double beam_rate =
         beam_current * 1.e-9 / 1.602176634e-19; // Hz
     const double beamN_window =
-        350. * 1.e-9 * beam_rate; // beam particles in a 350 ns window
+        400. * 1.e-9 * beam_rate; // beam particles in a 400 ns window
     const Int_t bgEntry = static_cast<Int_t>(
-        static_cast<double>(availableNbg) / beamN_bg * 10. * beamN_window);
+        static_cast<double>(availableNbg) / beamN_bg * beamN_window / 10.)+1;
 
     Long64_t Nbg = Ndata * static_cast<Long64_t>(bgEntry);
     if(Nbg > availableNbg) {
@@ -234,7 +234,8 @@ void loadFile(TChain& file, string filename) {
     file.SetBranchAddress("GEM.Edep", &GasEdep[0]);
 }
 
-void GEMdig() {
+void GEMdig(Long64_t maxEvent = -1) {
+
     auto start = std::chrono::high_resolution_clock::now();
     gRandom->SetSeed(0);//1232 // 0 表示用系统时间自动生成种子
 
@@ -256,11 +257,20 @@ void GEMdig() {
     const EntryCounts entryCounts =
         Rsolve_bgEntry(
             &signal, &background, static_cast<int>(backgroundFiles.size()));
-    const Long64_t Ndata = entryCounts.ndata;
-    const Long64_t Nbg = entryCounts.nbg;
+    Long64_t Ndata = entryCounts.ndata;
+    Long64_t Nbg = entryCounts.nbg;
     Int_t bg_entry = entryCounts.bgEntry;
+
+    bg_entry = 0;
+
+    if(maxEvent > 0 && maxEvent < Ndata) {
+        Ndata = maxEvent;
+        Nbg = Ndata * static_cast<Long64_t>(bg_entry);
+    }
     
     cout << "Background entries per signal event: " << bg_entry << endl;
+    cout << "Use " << Ndata << " signal entries and "
+         << Nbg << " background entries." << endl;
     TH1D *peakX_signal = new TH1D("peakX_signal", "peakX of the pulse", 250/2, 0, 2500);
     TH1D *peakY_signal = new TH1D("peakY_signal", "peakY of the pulse", 250/2, 0, 2500);
     TH1D *chargeX_signal = new TH1D("chargeX_signal", "total charge on X strips", 500/2, 0, 5000);
@@ -273,8 +283,8 @@ void GEMdig() {
     TH1D *Occupancy_X[4];
     TH1D *Occupancy_Y[4];
     for(int did = 0; did < 4; did++){
-        Occupancy_X[did] = new TH1D(Form("Occupancy of chamber%d(X strips)", did), Form("Occupancy of chamber%d (X strips)", did), map_x_bins, 0, map_x_bins);
-        Occupancy_Y[did] = new TH1D(Form("Occupancy of chamber%d(Y strips)", did), Form("Occupancy of chamber%d (Y strips)", did), map_y_bins, 0, map_y_bins);
+        Occupancy_X[did] = new TH1D(Form("Occupancy of chamber%d(X strips)", did), Form("Occupancy of chamber%d (X strips)", did), map_x_bins, 0-0.5, map_x_bins-0.5);
+        Occupancy_Y[did] = new TH1D(Form("Occupancy of chamber%d(Y strips)", did), Form("Occupancy of chamber%d (Y strips)", did), map_y_bins, 0-0.5, map_y_bins-0.5);
     }
 
     TFile *FiredStripsF = new TFile("output/FiredStrips_test.root", "RECREATE");
@@ -392,6 +402,9 @@ void GEMdig() {
     int totalEvent[4] = {0, 0, 0, 0}, validEvent[4] = {0, 0, 0, 0}; 
 
     double validEntries = 0;
+    double totalOccupancy_X[4] = {0, 0, 0, 0};
+    double totalOccupancy_Y[4] = {0, 0, 0, 0};
+
     for(int i=0;i<Ndata;i++) { //max 9000 for 4um
         if (i%5 == 0) cout << "start " << i << "\r" << flush;        
 
@@ -531,7 +544,7 @@ void GEMdig() {
         int bg = 0;
         for(int ii=i*bg_entry; ii<(i+1)*bg_entry; ii++) {
             background.GetEntry(ii);
-            Double_t t0 = gRandom->Uniform(-200., 6.*25.);
+            Double_t t0 = gRandom->Uniform(-25.*8., 8.*25);
 
             for(int n = 0; n < GasN; n++){
                 int did = GasDID[n];
@@ -640,6 +653,8 @@ void GEMdig() {
                     totalChargeX[did][firedIndex] = totalCharge;
                     peakSampleX[did][firedIndex] = peakSample;
                     fireNumX[did]++;
+                    Occupancy_X[did]->Fill(kx);
+                    totalOccupancy_X[did] += 1;
                 }
             }
 
@@ -671,6 +686,8 @@ void GEMdig() {
                     totalChargeY[did][firedIndex] = totalCharge;
                     peakSampleY[did][firedIndex] = peakSample;
                     fireNumY[did]++;
+                    Occupancy_Y[did]->Fill(ky);
+                    totalOccupancy_Y[did] += 1;
                 }
             }
         }
@@ -688,6 +705,12 @@ void GEMdig() {
 
     for(int did = 0; did < 4; did++) {
         std::cout << "Detector " << did << ": Total Events = " << totalEvent[did] << ", Valid Events = " << validEvent[did] << ", Efficiency: " << (totalEvent[did] > 0 ? static_cast<double>(validEvent[did]) / totalEvent[did] : 0.) << std::endl;
+    }
+
+    for(int did = 0; did < 4; did++) {
+        totalOccupancy_X[did] = totalOccupancy_X[did] / map_x_bins / validEntries;
+        totalOccupancy_Y[did] = totalOccupancy_Y[did] / map_y_bins / validEntries;
+        std::cout << "Detector " << did << ": Total Occupancy X = " << totalOccupancy_X[did]*100. << "%, Total Occupancy Y = " << totalOccupancy_Y[did]*100. << "%" << std::endl;
     }
 
     TCanvas *c1 = new TCanvas("c1", "Peak Distributions", 800, 600);
@@ -714,6 +737,24 @@ void GEMdig() {
     clusterSizeX_signal->Draw();
     c3->cd(2);
     clusterSizeY_signal->Draw();
+
+    for(int did = 0; did < 4; did++) {
+        Occupancy_X[did]->Scale(100.0 / validEntries);
+        Occupancy_Y[did]->Scale(100.0 / validEntries);
+    }
+    TCanvas *c4 = new TCanvas("c4", "Occupancy Distributions X", 800, 600);
+    c4->Divide(2, 2);
+    for(int did = 0; did < 4; did++) {
+        c4->cd(did+1);
+        Occupancy_X[did]->Draw();
+    }
+    TCanvas *c5 = new TCanvas("c5", "Occupancy Distributions Y", 800, 600);
+    c5->Divide(2, 2);
+    for(int did = 0; did < 4; did++) {
+        c5->cd(did+1);
+        Occupancy_Y[did]->Draw();
+    }
+    gSystem->ProcessEvents(); // Update the canvases to display the plots
 
     TFile *outputF = new TFile("output/GEMdig_output_test.root", "RECREATE");
     outputF->cd();
